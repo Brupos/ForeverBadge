@@ -1,0 +1,9 @@
+## Interface: 16001
+## Title: |cff00d1b2Forever|r Badge
+## Notes: Highlights items, recipes, and NPCs exclusive to WoW: Forever.
+## Author: YourName
+## Version: 1.0.0
+## SavedVariables: ForeverBadgeDB
+
+Data.lua
+Core.lua
