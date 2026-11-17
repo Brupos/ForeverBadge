@@ -66,40 +66,35 @@ local function IsForeverNPC(npcID)
     return false, nil
 end
 
--- Helper: Apply or remove the custom glow + corner diamond on Blizzard item slot buttons
+-- Helper: Apply or remove the clean colored border glow on any item slot button (No corner icon)
 local function ApplyForeverSlotHighlight(button, isForever)
     if not button then return end
     local c = (ForeverBadgeDB and ForeverBadgeDB.badgeColor) or defaults.badgeColor
 
-    if not button.ForeverGlow then
-        local glow = button:CreateTexture(nil, "OVERLAY")
+    if not button.ForeverGlowFrame then
+        local glowFrame = CreateFrame("Frame", nil, button)
+        glowFrame:SetAllPoints(button)
+        glowFrame:SetFrameLevel((button:GetFrameLevel() or 1) + 5)
+
+        local glow = glowFrame:CreateTexture(nil, "OVERLAY", nil, 7)
         glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
         glow:SetBlendMode("ADD")
-        glow:SetPoint("CENTER", button, "CENTER", 0, 0)
+        glow:SetPoint("CENTER", glowFrame, "CENTER", 0, 0)
         glow:SetSize((button:GetWidth() or 37) * 1.65, (button:GetHeight() or 37) * 1.65)
-        glow:Hide()
-        button.ForeverGlow = glow
+        glowFrame.glow = glow
+        glowFrame:Hide()
 
-        local badge = button:CreateTexture(nil, "OVERLAY", nil, 2)
-        badge:SetTexture("Interface\\COMMON\\Indicator-Diamond")
-        badge:SetSize(14, 14)
-        badge:SetPoint("TOPLEFT", button, "TOPLEFT", 1, -1)
-        badge:Hide()
-        button.ForeverCornerBadge = badge
+        button.ForeverGlowFrame = glowFrame
     end
 
-    button.ForeverGlow:SetVertexColor(c.r, c.g, c.b, 0.95)
-    button.ForeverGlow:SetShown(isForever)
-
-    if button.ForeverCornerBadge then
-        button.ForeverCornerBadge:SetVertexColor(math.min(c.r + 0.15, 1), math.min(c.g + 0.15, 1), math.min(c.b + 0.15, 1), 1.0)
-        button.ForeverCornerBadge:SetShown(isForever)
-    end
+    button.ForeverGlowFrame.glow:SetVertexColor(c.r, c.g, c.b, 1.0)
+    button.ForeverGlowFrame:SetShown(isForever)
 end
 
 -- Initialize SavedVariables safely on login
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
+eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
 eventFrame:RegisterEvent("GOSSIP_SHOW")
 eventFrame:RegisterEvent("QUEST_DETAIL")
@@ -123,6 +118,9 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         elseif arg1 == "Baganator" then
             ns:InitBaganatorSupport()
         end
+    elseif event == "PLAYER_LOGIN" then
+        ns:InitBaganatorSupport()
+        ns:EnsureBaganatorCornerActive()
     elseif event == "BAG_UPDATE_DELAYED" then
         ns:UpdateAllBagHighlights()
     elseif event == "GOSSIP_SHOW" or event == "QUEST_DETAIL" or event == "QUEST_PROGRESS" or event == "QUEST_COMPLETE" then
@@ -278,7 +276,35 @@ for i = 1, 13 do
     end
 end
 
--- Baganator Full Border Glow + Corner Widget Integration
+-- Ensure Baganator places "forever_badge" in top_left even on existing user profiles
+function ns:EnsureBaganatorCornerActive()
+    local baganator = _G["Baganator"]
+    if not baganator or not baganator.Config or not baganator.Config.Get then return end
+
+    local corners = baganator.Config.Get("icon_corners")
+    if type(corners) == "table" then
+        local alreadyPlaced = false
+        for _, list in pairs(corners) do
+            if type(list) == "table" then
+                for _, id in ipairs(list) do
+                    if id == "forever_badge" then
+                        alreadyPlaced = true
+                        break
+                    end
+                end
+            end
+        end
+        if not alreadyPlaced then
+            corners.top_left = corners.top_left or {}
+            table.insert(corners.top_left, 1, "forever_badge")
+            if baganator.API and baganator.API.RequestItemButtonsRefresh then
+                baganator.API.RequestItemButtonsRefresh()
+            end
+        end
+    end
+end
+
+-- Baganator Border-Only Integration (No corner diamond icon)
 local baganatorRegistered = false
 function ns:InitBaganatorSupport()
     if baganatorRegistered then return end
@@ -289,35 +315,22 @@ function ns:InitBaganatorSupport()
             function(cornerFrame, details)
                 local enabled = ForeverBadgeDB and ForeverBadgeDB.highlightBags
                 local isForever = enabled and IsForeverItem(details and details.itemID)
-                local c = (ForeverBadgeDB and ForeverBadgeDB.badgeColor) or defaults.badgeColor
-
-                if cornerFrame.texture then
-                    cornerFrame.texture:SetVertexColor(math.min(c.r + 0.15, 1), math.min(c.g + 0.15, 1), math.min(c.b + 0.15, 1), 1.0)
-                end
-                if cornerFrame.glow then
-                    cornerFrame.glow:SetVertexColor(c.r, c.g, c.b, 0.95)
-                    cornerFrame.glow:SetShown(isForever)
+                local btn = cornerFrame.parentButton
+                if btn then
+                    ApplyForeverSlotHighlight(btn, isForever)
                 end
                 return isForever
             end,
             function(itemButton)
                 local frame = CreateFrame("Frame", nil, itemButton)
-                frame:SetSize(14, 14)
+                frame:SetSize(1, 1)
+                frame.parentButton = itemButton
 
-                -- Top-left diamond marker
-                local tex = frame:CreateTexture(nil, "OVERLAY")
-                tex:SetAllPoints()
-                tex:SetTexture("Interface\\COMMON\\Indicator-Diamond")
-                frame.texture = tex
-
-                -- Full slot border glow anchored to Baganator's itemButton
-                local glow = frame:CreateTexture(nil, "OVERLAY")
-                glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
-                glow:SetBlendMode("ADD")
-                glow:SetPoint("CENTER", itemButton, "CENTER", 0, 0)
-                glow:SetSize((itemButton:GetWidth() or 37) * 1.65, (itemButton:GetHeight() or 37) * 1.65)
-                glow:Hide()
-                frame.glow = glow
+                itemButton:HookScript("OnHide", function(self)
+                    if self.ForeverGlowFrame then
+                        self.ForeverGlowFrame:Hide()
+                    end
+                end)
 
                 return frame
             end,
@@ -421,7 +434,7 @@ function ns:RegisterSettings()
     AddCheckbox("showItems", "Show Badges on Forever Items", "Displays the Forever Exclusive tag on new items and recipes.")
     AddCheckbox("showNPCs", "Show Badges on Forever NPCs", "Displays the Forever Exclusive tag when mousing over new NPCs and vendors.")
     AddCheckbox("showDialogBadges", "Show [Forever] Tag in NPC Dialogs", "Adds a [Forever] badge to quest and gossip window titles for new NPCs.")
-    AddCheckbox("highlightBags", "Glow Forever Items in Bags", "Adds a colored border glow and corner marker to Forever items in your bags (including Baganator).", function() ns:UpdateAllBagHighlights() end)
+    AddCheckbox("highlightBags", "Glow Forever Items in Bags", "Adds a colored border glow to Forever items in your bags (including Baganator).", function() ns:UpdateAllBagHighlights() end)
     AddCheckbox("highlightVendors", "Glow Forever Items at Vendors", "Adds a colored border glow to Forever-exclusive items inside merchant windows.", function() ns:UpdateAllBagHighlights() end)
     AddCheckbox("useInfinitySymbol", "Use Compact [∞ Forever] Symbol", "Replaces [Forever Exclusive] with the shorter [∞ Forever] icon tag.")
     AddCheckbox("compactTooltips", "Compact Tooltip Line (No Extra Space)", "Keeps the tooltip tag on a single compact line without an extra blank spacer.")
