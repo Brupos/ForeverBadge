@@ -7,6 +7,7 @@ local defaults = {
     showItems = true,
     showNPCs = true,
     highlightVendors = true,
+    highlightBags = true,
     autoLogUnknowns = true,
     discoveredItems = {},
     discoveredNPCs = {},
@@ -34,22 +35,54 @@ local function GetNPCIDFromGUID(guid)
     return nil
 end
 
+-- Helper: Apply or remove the teal glow + corner diamond on any item slot button
+local function ApplyForeverSlotHighlight(button, isForever)
+    if not button then return end
+
+    if not button.ForeverGlow then
+        local glow = button:CreateTexture(nil, "OVERLAY")
+        glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+        glow:SetBlendMode("ADD")
+        glow:SetVertexColor(0.0, 0.82, 0.70, 0.95) -- Signature Teal Glow
+        glow:SetPoint("CENTER", button, "CENTER", 0, 0)
+        glow:SetSize((button:GetWidth() or 37) * 1.65, (button:GetHeight() or 37) * 1.65)
+        glow:Hide()
+        button.ForeverGlow = glow
+
+        -- Small corner badge icon so it's readable even without hovering
+        local badge = button:CreateTexture(nil, "OVERLAY", nil, 2)
+        badge:SetTexture("Interface\\COMMON\\Indicator-Diamond")
+        badge:SetVertexColor(0.0, 0.95, 0.82, 1.0)
+        badge:SetSize(14, 14)
+        badge:SetPoint("TOPLEFT", button, "TOPLEFT", 1, -1)
+        badge:Hide()
+        button.ForeverCornerBadge = badge
+    end
+
+    button.ForeverGlow:SetShown(isForever)
+    if button.ForeverCornerBadge then
+        button.ForeverCornerBadge:SetShown(isForever)
+    end
+end
 
 -- Initialize SavedVariables safely on login
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
-eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
-    if loadedAddon ~= addonName then return end
-
-    ForeverBadgeDB = ForeverBadgeDB or {}
-    for k, v in pairs(defaults) do
-        if ForeverBadgeDB[k] == nil then
-            ForeverBadgeDB[k] = (type(v) == "table") and {} or v
+eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
+eventFrame:SetScript("OnEvent", function(self, event, arg1)
+    if event == "ADDON_LOADED" and arg1 == addonName then
+        ForeverBadgeDB = ForeverBadgeDB or {}
+        for k, v in pairs(defaults) do
+            if ForeverBadgeDB[k] == nil then
+                ForeverBadgeDB[k] = (type(v) == "table") and {} or v
+            end
         end
-    end
 
-    ns:RegisterSettings()
-    self:UnregisterEvent("ADDON_LOADED")
+        ns:RegisterSettings()
+        self:UnregisterEvent("ADDON_LOADED")
+    elseif event == "BAG_UPDATE_DELAYED" then
+        ns:UpdateAllBagHighlights()
+    end
 end)
 
 -- 1. Hook Item & Recipe Tooltips (Bags, Vendors, Loot, Chat Links, AH)
@@ -107,25 +140,13 @@ local function UpdateMerchantHighlights()
     for i = 1, perPage do
         local itemButton = _G["MerchantItem" .. i .. "ItemButton"]
         if itemButton then
-            if not itemButton.ForeverGlow then
-                local glow = itemButton:CreateTexture(nil, "OVERLAY")
-                glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
-                glow:SetBlendMode("ADD")
-                glow:SetVertexColor(0.0, 0.82, 0.70, 0.95) -- Signature Teal Glow
-                glow:SetPoint("CENTER", itemButton, "CENTER", 0, 0)
-                glow:SetSize(itemButton:GetWidth() * 1.65, itemButton:GetHeight() * 1.65)
-                glow:Hide()
-                itemButton.ForeverGlow = glow
-            end
-
             local index = ((page - 1) * perPage) + i
+            local isForever = false
             if ForeverBadgeDB and ForeverBadgeDB.highlightVendors and index <= numItems then
                 local itemID = GetMerchantItemID(index)
-                local isForever = IsForeverItem(itemID)
-                itemButton.ForeverGlow:SetShown(isForever)
-            else
-                itemButton.ForeverGlow:Hide()
+                isForever = IsForeverItem(itemID)
             end
+            ApplyForeverSlotHighlight(itemButton, isForever)
         end
     end
 end
@@ -134,7 +155,56 @@ if MerchantFrame_Update then
     hooksecurefunc("MerchantFrame_Update", UpdateMerchantHighlights)
 end
 
--- 4. Copyable Export Frame (/fb export)
+-- 4. Inventory / Bag Teal Border Highlighting (Combined Bags + Classic Individual Bags)
+local function UpdateContainerFrame(frame)
+    if not frame or not frame.EnumerateValidItems then return end
+    local enabled = ForeverBadgeDB and ForeverBadgeDB.highlightBags
+
+    for _, itemButton in frame:EnumerateValidItems() do
+        local isForever = false
+        if enabled then
+            local bagID = itemButton:GetBagID()
+            local slotID = itemButton:GetID()
+            local itemID = C_Container.GetContainerItemID(bagID, slotID)
+            isForever = IsForeverItem(itemID)
+        end
+        ApplyForeverSlotHighlight(itemButton, isForever)
+    end
+end
+
+function ns:UpdateAllBagHighlights()
+    -- Combined Backpack frame (modern UI)
+    if ContainerFrameCombinedBags and ContainerFrameCombinedBags:IsShown() then
+        UpdateContainerFrame(ContainerFrameCombinedBags)
+    end
+
+    -- Individual Bag frames (ContainerFrame1 .. ContainerFrame13)
+    local maxBags = NUM_TOTAL_EQUIPPED_BAG_SLOTS or 5
+    for i = 1, maxBags + 8 do
+        local frame = _G["ContainerFrame" .. i]
+        if frame and frame:IsShown() then
+            UpdateContainerFrame(frame)
+        end
+    end
+end
+
+-- Hook Blizzard's native bag item update methods so highlights persist across opens/closes/moves
+if ContainerFrameCombinedBags and ContainerFrameCombinedBags.UpdateItems then
+    hooksecurefunc(ContainerFrameCombinedBags, "UpdateItems", function(self)
+        UpdateContainerFrame(self)
+    end)
+end
+
+for i = 1, 13 do
+    local frame = _G["ContainerFrame" .. i]
+    if frame and frame.UpdateItems then
+        hooksecurefunc(frame, "UpdateItems", function(self)
+            UpdateContainerFrame(self)
+        end)
+    end
+end
+
+-- 5. Copyable Export Frame (/fb export)
 local exportFrame
 local function ShowExportWindow()
     if not exportFrame then
@@ -177,7 +247,7 @@ local function ShowExportWindow()
     exportFrame.editBox:HighlightText()
 end
 
--- 5. Native Blizzard Settings Menu (Options > AddOns > Forever Badge)
+-- 6. Native Blizzard Settings Menu (Options > AddOns > Forever Badge)
 function ns:RegisterSettings()
     if not Settings or not Settings.RegisterVerticalLayoutCategory then return end
 
@@ -198,6 +268,7 @@ function ns:RegisterSettings()
 
     AddCheckbox("showItems", "Show Badges on Forever Items", "Displays the Forever Exclusive tag on new items and recipes.")
     AddCheckbox("showNPCs", "Show Badges on Forever NPCs", "Displays the Forever Exclusive tag when mousing over new NPCs and vendors.")
+    AddCheckbox("highlightBags", "Glow Forever Items in Bags", "Adds a teal border glow and corner marker to Forever items in your inventory.")
     AddCheckbox("highlightVendors", "Glow Forever Items at Vendors", "Adds a teal border glow to Forever-exclusive items inside merchant windows.")
     AddCheckbox("autoLogUnknowns", "Auto-Log Newly Discovered IDs", "Saves uncategorized high-ID Forever items and NPCs to your local database.")
 
@@ -205,7 +276,7 @@ function ns:RegisterSettings()
     ns.settingsCategoryID = category:GetID()
 end
 
--- 6. Slash Commands (/fb, /fb export, /fb inspect, /fb stats)
+-- 7. Slash Commands (/fb, /fb export, /fb inspect, /fb stats)
 SLASH_FOREVERBADGE1 = "/fb"
 SlashCmdList["FOREVERBADGE"] = function(msg)
     msg = strtrim(msg or ""):lower()
