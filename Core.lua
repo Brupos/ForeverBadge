@@ -44,11 +44,7 @@ end
 -- Helper: Extracts NPC ID from a Unit GUID
 local function GetNPCIDFromGUID(guid)
     local isSecret = _G["issecretvalue"]
-    if guid or (isSecret and isSecret(guid)) then
-        if isSecret and isSecret(guid) then return nil end
-    else
-        return nil
-    end
+    if not guid or (isSecret and isSecret(guid)) then return nil end
     local unitType, _, _, _, _, npcID = strsplit("-", guid)
     if unitType == "Creature" or unitType == "Vehicle" then
         return tonumber(npcID)
@@ -70,7 +66,7 @@ local function IsForeverNPC(npcID)
     return false, nil
 end
 
--- Helper: Apply or remove the custom glow + corner diamond on any item slot button
+-- Helper: Apply or remove the custom glow + corner diamond on Blizzard item slot buttons
 local function ApplyForeverSlotHighlight(button, isForever)
     if not button then return end
     local c = (ForeverBadgeDB and ForeverBadgeDB.badgeColor) or defaults.badgeColor
@@ -259,6 +255,11 @@ function ns:UpdateAllBagHighlights()
         end
     end
 
+    local baganator = _G["Baganator"]
+    if baganator and baganator.API and baganator.API.RequestItemButtonsRefresh then
+        baganator.API.RequestItemButtonsRefresh()
+    end
+
     UpdateMerchantHighlights()
 end
 
@@ -277,7 +278,7 @@ for i = 1, 13 do
     end
 end
 
--- Baganator Corner Widget Integration (if Baganator is installed)
+-- Baganator Full Border Glow + Corner Widget Integration
 local baganatorRegistered = false
 function ns:InitBaganatorSupport()
     if baganatorRegistered then return end
@@ -286,21 +287,38 @@ function ns:InitBaganatorSupport()
         baganatorRegistered = true
         baganator.API.RegisterCornerWidget("Forever Badge", "forever_badge",
             function(cornerFrame, details)
-                if not ForeverBadgeDB or not ForeverBadgeDB.highlightBags then return false end
-                local isForever = IsForeverItem(details and details.itemID)
-                if isForever and cornerFrame.texture then
-                    local c = ForeverBadgeDB.badgeColor or defaults.badgeColor
-                    cornerFrame.texture:SetVertexColor(c.r, c.g, c.b, 1.0)
+                local enabled = ForeverBadgeDB and ForeverBadgeDB.highlightBags
+                local isForever = enabled and IsForeverItem(details and details.itemID)
+                local c = (ForeverBadgeDB and ForeverBadgeDB.badgeColor) or defaults.badgeColor
+
+                if cornerFrame.texture then
+                    cornerFrame.texture:SetVertexColor(math.min(c.r + 0.15, 1), math.min(c.g + 0.15, 1), math.min(c.b + 0.15, 1), 1.0)
+                end
+                if cornerFrame.glow then
+                    cornerFrame.glow:SetVertexColor(c.r, c.g, c.b, 0.95)
+                    cornerFrame.glow:SetShown(isForever)
                 end
                 return isForever
             end,
             function(itemButton)
                 local frame = CreateFrame("Frame", nil, itemButton)
                 frame:SetSize(14, 14)
+
+                -- Top-left diamond marker
                 local tex = frame:CreateTexture(nil, "OVERLAY")
                 tex:SetAllPoints()
                 tex:SetTexture("Interface\\COMMON\\Indicator-Diamond")
                 frame.texture = tex
+
+                -- Full slot border glow anchored to Baganator's itemButton
+                local glow = frame:CreateTexture(nil, "OVERLAY")
+                glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+                glow:SetBlendMode("ADD")
+                glow:SetPoint("CENTER", itemButton, "CENTER", 0, 0)
+                glow:SetSize((itemButton:GetWidth() or 37) * 1.65, (itemButton:GetHeight() or 37) * 1.65)
+                glow:Hide()
+                frame.glow = glow
+
                 return frame
             end,
             { corner = "top_left", priority = 2 }
