@@ -8,6 +8,8 @@ local defaults = {
     highlightBags = true,
     showDialogBadges = true,
     compactTooltips = true,
+    useInfinitySymbol = false,
+    previewMode = false,
     autoLogUnknowns = true,
     badgeColor = { r = 0.0, g = 0.82, b = 0.70 }, -- Default Teal (#00d1b2)
     discoveredItems = {},
@@ -21,12 +23,16 @@ local function GetBadgeHex()
 end
 
 local function GetBadgePrefix()
-    return GetBadgeHex() .. "[Forever Exclusive]|r"
+    local label = (ForeverBadgeDB and ForeverBadgeDB.useInfinitySymbol) and "[∞ Forever]" or "[Forever Exclusive]"
+    return GetBadgeHex() .. label .. "|r"
 end
 
 -- Helper: Check if an Item ID belongs to WoW: Forever
 local function IsForeverItem(itemID)
     if not itemID then return false, nil end
+    if ForeverBadgeDB and ForeverBadgeDB.previewMode then
+        return true, "Preview Mode"
+    end
     if ns.ForeverItems[itemID] then
         return true, ns.ForeverItems[itemID]
     elseif itemID >= ns.FOREVER_MIN_ITEM_ID then
@@ -38,7 +44,11 @@ end
 -- Helper: Extracts NPC ID from a Unit GUID
 local function GetNPCIDFromGUID(guid)
     local isSecret = _G["issecretvalue"]
-    if not guid or (isSecret and isSecret(guid)) then return nil end
+    if guid or (isSecret and isSecret(guid)) then
+        if isSecret and isSecret(guid) then return nil end
+    else
+        return nil
+    end
     local unitType, _, _, _, _, npcID = strsplit("-", guid)
     if unitType == "Creature" or unitType == "Vehicle" then
         return tonumber(npcID)
@@ -49,6 +59,9 @@ end
 -- Helper: Check if an NPC ID belongs to WoW: Forever
 local function IsForeverNPC(npcID)
     if not npcID then return false, nil end
+    if ForeverBadgeDB and ForeverBadgeDB.previewMode then
+        return true, "Preview Mode"
+    end
     if ns.ForeverNPCs[npcID] then
         return true, ns.ForeverNPCs[npcID]
     elseif npcID >= ns.FOREVER_MIN_NPC_ID then
@@ -121,7 +134,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
     end
 end)
 
--- 1. Hook Item & Recipe Tooltips (Compact or Spaced)
+-- 1. Hook Item & Recipe Tooltips
 TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip, data)
     if not ForeverBadgeDB or not ForeverBadgeDB.showItems then return end
     if not data or not data.id then return end
@@ -130,7 +143,7 @@ TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tool
     local isForever, label = IsForeverItem(itemID)
 
     if isForever then
-        if not ns.ForeverItems[itemID] and ForeverBadgeDB.autoLogUnknowns and not ForeverBadgeDB.discoveredItems[itemID] then
+        if not ForeverBadgeDB.previewMode and not ns.ForeverItems[itemID] and ForeverBadgeDB.autoLogUnknowns and not ForeverBadgeDB.discoveredItems[itemID] then
             local itemName = C_Item.GetItemNameByID(itemID) or "Unknown Item"
             ForeverBadgeDB.discoveredItems[itemID] = itemName
         end
@@ -154,7 +167,7 @@ TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, function(tool
     local isForever, label = IsForeverNPC(npcID)
 
     if isForever then
-        if not ns.ForeverNPCs[npcID] and ForeverBadgeDB.autoLogUnknowns and not ForeverBadgeDB.discoveredNPCs[npcID] then
+        if not ForeverBadgeDB.previewMode and not ns.ForeverNPCs[npcID] and ForeverBadgeDB.autoLogUnknowns and not ForeverBadgeDB.discoveredNPCs[npcID] then
             local unitName = UnitName("mouseover") or "Unknown NPC"
             ForeverBadgeDB.discoveredNPCs[npcID] = unitName
         end
@@ -173,20 +186,18 @@ function ns:UpdateDialogBadge()
     local isForever = IsForeverNPC(npcID)
     if not isForever then return end
 
-    local tag = GetBadgeHex() .. "[Forever] |r"
+    local tag = GetBadgeHex() .. (ForeverBadgeDB.useInfinitySymbol and "[∞] |r" or "[Forever] |r")
 
-    -- Standard Blizzard Gossip Frame
     if GossipFrame and GossipFrame:IsShown() and GossipFrameTitleText then
         local text = GossipFrameTitleText:GetText()
-        if text and not text:find("%[Forever%]") then
+        if text and not text:find("%[Forever%]") and not text:find("%[∞%]") then
             GossipFrameTitleText:SetText(tag .. text)
         end
     end
 
-    -- Standard Blizzard Quest Frame
     if QuestFrame and QuestFrame:IsShown() and QuestFrameTitleText then
         local text = QuestFrameTitleText:GetText()
-        if text and not text:find("%[Forever%]") then
+        if text and not text:find("%[Forever%]") and not text:find("%[∞%]") then
             QuestFrameTitleText:SetText(tag .. text)
         end
     end
@@ -373,7 +384,7 @@ function ns:RegisterSettings()
 
     local category, layout = Settings.RegisterVerticalLayoutCategory("Forever Badge")
 
-    local function AddCheckbox(variable, name, tooltipText)
+    local function AddCheckbox(variable, name, tooltipText, onValueChanged)
         local setting = Settings.RegisterAddOnSetting(
             category,
             addonName .. "_" .. variable,
@@ -383,16 +394,21 @@ function ns:RegisterSettings()
             name,
             defaults[variable]
         )
+        if onValueChanged then
+            setting:SetValueChangedCallback(onValueChanged)
+        end
         Settings.CreateCheckbox(category, setting, tooltipText)
     end
 
     AddCheckbox("showItems", "Show Badges on Forever Items", "Displays the Forever Exclusive tag on new items and recipes.")
     AddCheckbox("showNPCs", "Show Badges on Forever NPCs", "Displays the Forever Exclusive tag when mousing over new NPCs and vendors.")
     AddCheckbox("showDialogBadges", "Show [Forever] Tag in NPC Dialogs", "Adds a [Forever] badge to quest and gossip window titles for new NPCs.")
-    AddCheckbox("highlightBags", "Glow Forever Items in Bags", "Adds a colored border glow and corner marker to Forever items in your bags (including Baganator).")
-    AddCheckbox("highlightVendors", "Glow Forever Items at Vendors", "Adds a colored border glow to Forever-exclusive items inside merchant windows.")
+    AddCheckbox("highlightBags", "Glow Forever Items in Bags", "Adds a colored border glow and corner marker to Forever items in your bags (including Baganator).", function() ns:UpdateAllBagHighlights() end)
+    AddCheckbox("highlightVendors", "Glow Forever Items at Vendors", "Adds a colored border glow to Forever-exclusive items inside merchant windows.", function() ns:UpdateAllBagHighlights() end)
+    AddCheckbox("useInfinitySymbol", "Use Compact [∞ Forever] Symbol", "Replaces [Forever Exclusive] with the shorter [∞ Forever] icon tag.")
     AddCheckbox("compactTooltips", "Compact Tooltip Line (No Extra Space)", "Keeps the tooltip tag on a single compact line without an extra blank spacer.")
     AddCheckbox("autoLogUnknowns", "Auto-Log Newly Discovered IDs", "Saves uncategorized high-ID Forever items and NPCs to your local database.")
+    AddCheckbox("previewMode", "Preview Mode (Highlight Everything)", "Temporarily highlights all items so you can test colors and appearance.", function() ns:UpdateAllBagHighlights() end)
 
     if CreateSettingsButtonInitializer and layout then
         local colorBtn = CreateSettingsButtonInitializer(
@@ -409,13 +425,20 @@ function ns:RegisterSettings()
     ns.settingsCategoryID = category:GetID()
 end
 
--- 9. Slash Commands (/fb, /fb color, /fb export, /fb inspect, /fb stats)
+-- 9. Slash Commands (/fb, /fb color, /fb preview, /fb status, /fb export, /fb inspect, /fb stats)
 SLASH_FOREVERBADGE1 = "/fb"
 SlashCmdList["FOREVERBADGE"] = function(msg)
     msg = strtrim(msg or ""):lower()
 
     if msg == "color" then
         OpenHighlightColorPicker()
+    elseif msg == "preview" then
+        ForeverBadgeDB.previewMode = not ForeverBadgeDB.previewMode
+        ns:UpdateAllBagHighlights()
+        print(GetBadgePrefix() .. " Preview Mode: " .. (ForeverBadgeDB.previewMode and "|cff00ff00ON|r" or "|cffff5555OFF|r"))
+    elseif msg == "status" then
+        local version = C_AddOns.GetAddOnMetadata(addonName, "Version") or "1.0.0"
+        print(GetBadgePrefix() .. " v" .. version .. " | Item Cutoff: >= " .. ns.FOREVER_MIN_ITEM_ID .. " | NPC Cutoff: >= " .. ns.FOREVER_MIN_NPC_ID .. " | Baganator: " .. (baganatorRegistered and "|cff00ff00Hooked|r" or "|cffaaaaaaNot Installed|r"))
     elseif msg == "export" then
         ShowExportWindow()
     elseif msg == "inspect" then
@@ -435,7 +458,7 @@ SlashCmdList["FOREVERBADGE"] = function(msg)
         if ns.settingsCategoryID and Settings.OpenToCategory then
             Settings.OpenToCategory(ns.settingsCategoryID)
         else
-            print(GetBadgePrefix() .. " Commands: |cffffff00/fb color|r | |cffffff00/fb export|r | |cffffff00/fb inspect|r | |cffffff00/fb stats|r")
+            print(GetBadgePrefix() .. " Commands: |cffffff00/fb color|r | |cffffff00/fb preview|r | |cffffff00/fb status|r | |cffffff00/fb export|r | |cffffff00/fb inspect|r")
         end
     end
 end
